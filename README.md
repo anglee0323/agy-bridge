@@ -21,7 +21,20 @@ curl -s localhost:8789/health # 状态
 
 harness 侧：任意支持自定义 OpenAI base URL 的工具，指向 `http://127.0.0.1:8789/v1`，API key 随意填，模型名即 `gemini-3.8-flash` / `claude-sonnet-4-6` / `claude-opus-4-6-thinking`。
 
-环境变量：`AGY_BRIDGE_PORT`、`AGY_BRIDGE_TOKEN`、`AGY_BRIDGE_HOME`、`AGY_BRIDGE_DEFAULT_EFFORT`、`AGY_BRIDGE_MAX_SESSIONS` 等。
+其它子命令：
+
+```
+accounts / whoami                     查看金库与当前登录号
+migrate-from-agy-switch               一次性把 ~/.antigravity_tools 账号迁入桥自己的金库
+protect / unprotect <id|email|name>   保护账号：永不自动切入（主号用）
+add-account [--no-browser]            浏览器 OAuth 登录新号入金库
+backup [note] / backups / restore     凭据备份与恢复
+switch <id|email> [--dry-run]         手动切号（先刷新，失败零写入）
+```
+
+数据位置：`~/.agy-bridge/vault/` 是桥自己的账号金库（与 agy-switch 完全解耦，删它不影响本桥）；`~/.cache/agy-bridge/` 放运行数据、备份与 state.json。
+
+环境变量：`AGY_BRIDGE_PORT`、`AGY_BRIDGE_TOKEN`、`AGY_BRIDGE_HOME`、`AGY_BRIDGE_DEFAULT_EFFORT`、`AGY_BRIDGE_MAX_SESSIONS`、`AGY_BRIDGE_AUTO_SWITCH`、`AGY_BRIDGE_VAULT` 等。
 
 ## 结构
 
