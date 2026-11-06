@@ -13,7 +13,7 @@
  * 环境变量：AGY_BRIDGE_PORT / AGY_BRIDGE_TOKEN / AGY_BRIDGE_HOME / AGY_TOOLS_DIR / AGY_SESSION_FILE 等
  */
 import { BridgeError, mapError } from "../lib/util.mjs";
-import { listAccounts, findCurrentAccount, resolveAccount, upsertAccount } from "../lib/vault.mjs";
+import { listAccounts, findCurrentAccount, resolveAccount, upsertAccount, migrateFromAgySwitch } from "../lib/vault.mjs";
 import { backup, restore, listBackups, keychainRead } from "../lib/credstore.mjs";
 import { switchTo } from "../lib/switcher.mjs";
 import { refreshToken } from "../lib/oauth.mjs";
@@ -88,6 +88,9 @@ async function runCli() {
   if (subcommand === "add-account") {
     const result = await addAccount({ open: !rest.includes("--no-browser") }, (msg) => console.error(msg));
     return print(result);
+  }
+  if (subcommand === "migrate-from-agy-switch") {
+    return print(migrateFromAgySwitch());
   }
   if (subcommand === "whoami") {
     const current = await keychainRead();
