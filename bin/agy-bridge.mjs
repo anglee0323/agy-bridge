@@ -5,7 +5,7 @@
  *
  * 子命令：
  *   serve                            启动服务（默认，可省略）
- *   accounts                         列出金库账号（~/.antigravity_tools）并标记当前登录号
+ *   accounts / whoami                 查看金库账号与当前登录号
  *   backup [note]                    备份当前钥匙串条目 + 会话文件
  *   backups / restore <stamp>        查看 / 恢复备份
  *   switch <id|email> [--dry-run]    切号：先刷新目标 token，失败零写入
