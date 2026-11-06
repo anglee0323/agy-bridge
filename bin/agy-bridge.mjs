@@ -13,10 +13,11 @@
  * 环境变量：AGY_BRIDGE_PORT / AGY_BRIDGE_TOKEN / AGY_BRIDGE_HOME / AGY_TOOLS_DIR / AGY_SESSION_FILE 等
  */
 import { BridgeError, mapError } from "../lib/util.mjs";
-import { listAccounts, findCurrentAccount, upsertCurrentAccount } from "../lib/vault.mjs";
+import { listAccounts, findCurrentAccount, upsertAccount } from "../lib/vault.mjs";
 import { backup, restore, listBackups, keychainRead } from "../lib/credstore.mjs";
 import { switchTo } from "../lib/switcher.mjs";
 import { refreshToken } from "../lib/oauth.mjs";
+import { addAccount } from "../lib/login.mjs";
 
 const [subcommand = "serve", ...rest] = process.argv.slice(2);
 
@@ -64,7 +65,11 @@ async function runCli() {
     if (!current?.refreshToken) throw new BridgeError("BAD_REQUEST", "keychain has no antigravity credential to import");
     const identity = await identifyToken(current);
     const expiryTimestamp = current.expiry ? Math.floor(Date.parse(current.expiry) / 1000) : 0;
-    return print(upsertCurrentAccount({ ...identity, accessToken: current.accessToken, refreshToken: current.refreshToken, idToken: current.idToken, expiryTimestamp }, { name: rest.find((a) => !a.startsWith("--")) ?? null }));
+    return print(upsertAccount({ email: identity.email, name: rest.find((a) => !a.startsWith("--")) ?? null, accessToken: current.accessToken, refreshToken: current.refreshToken, idToken: current.idToken, expiryTimestamp }));
+  }
+  if (subcommand === "add-account") {
+    const result = await addAccount({ open: !rest.includes("--no-browser") }, (msg) => console.error(msg));
+    return print(result);
   }
   if (subcommand === "whoami") {
     const current = await keychainRead();

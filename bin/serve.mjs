@@ -39,6 +39,7 @@ const runtime = new Runtime({
   maxRelays: 6,
   maxContinuations: 3,
   keepAliveMs: 10_000,
+  autoSwitch: env.AGY_BRIDGE_AUTO_SWITCH !== "0",
 });
 
 const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
