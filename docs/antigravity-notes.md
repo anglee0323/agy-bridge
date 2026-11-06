@@ -1,0 +1,45 @@
+# Antigravity (agy) 实测行为备忘
+
+把本机已登录的 `agy acp` 包成 OpenAI 兼容接口（`127.0.0.1:8789/v1`），工具由调用方 harness 执行。
+这是验证用的 Node 原型，确认可行后移植为 agy-switch 仓库里的第二个二进制。
+
+```
+node --no-warnings server.mjs          # 启动
+node test-e2e.mjs                      # 端到端（真实 agy，少量额度，不切号）
+pi -e ./pi-provider.ts --model antigravity/gemini-3.8-flash
+```
+
+## 结构
+
+| 文件 | 职责 |
+|---|---|
+| `server.mjs` | HTTP 路由、回环/Origin/Content-Type 防护、配置 |
+| `lib/runtime.mjs` | 会话路由（resume / append / rebuild）、挂起回填、轮次泵、权限、中继 |
+| `lib/acp.mjs` | `agy acp` 进程与 NDJSON JSON-RPC |
+| `lib/mcp.mjs` | 回环 Streamable HTTP MCP，tools/call 以 SSE 挂起 |
+| `lib/transcript.mjs` | 消息归一化、指纹、历史重放、工具声明压缩 |
+| `lib/output.mjs` | OpenAI 流式 / 非流式写出，延迟提交响应头 |
+| `lib/usage-db.mjs` | 读 agy 会话库的逐步用量 |
+
+## 实测得到的 agy 行为（2026-11-06，本机 agy）
+
+- 登录态是 macOS 用户级的：`--gemini-dir`、`--app-data-dir` 只隔离数据，不隔离账号；换 HOME 则 `Authentication required`。切号只能在轮次之间做，切完要重建会话。
+- `--app-data-dir` 必须是相对路径（相对 gemini-dir），绝对路径会让 language server 启动失败。
+- 如实的 `clientInfo.name`（`agy-bridge`）就能看到 Claude / GPT-OSS，不需要伪造 JetBrains 白名单标识。
+- 插件 agent（`tools: []` + `excludeDefaultComponents: true` + `mainAgent: true`）生效后，内层只剩注入的 MCP 工具加 `list_resources` / `read_resource` / `manage_task`。
+- `toolPermission: request-review` 下，调用注入的 MCP 工具不会触发 `session/request_permission`。
+- MCP 工具名对 agent 呈现为 `mcp_<server>_<tool>`；`tools/call` 的 `_meta` 带 `antigravity.google/conversation_id` 与 `progressToken`。
+- 同一响应里的多个工具调用会被 agy 串行执行：第二个 `tools/call` 要等第一个返回后才发出，所以每个调用各占一次 harness 往返，期间没有新的模型步。
+- `session/prompt` 结果带整轮 usage（`inputTokens` 不含缓存命中）；逐步用量在 `<gemini-dir>/agy/conversations/<sessionId>.db` 的 `steps` 表。
+- 模型目录：`model` 配置项的值是模型族（`gemini-3.8-flash`、`claude-sonnet-4-6`、`claude-opus-4-6-thinking`、`gpt-oss-120b-medium`），思考强度是独立的 `thought_level`（low / medium / high）。
+- 内存：前台进程约 52MB，每个活会话一个 worker 约 90–140MB，桥本身约 51MB。
+
+## 已验证
+
+纯文本流式、跨进程续接走增量、工具挂起回填（Pi 的 read / bash / edit 全由 Pi 执行）、非流式、客户端中断取消上游、桥重启后历史重放、Claude 工具调用、长耗时工具中继保活、错误码映射、跨站与非 JSON 请求拦截。
+
+## 未做（移植阶段）
+
+- 额度耗尽时自动换号（接 agy-switch 的 `switch_account` / 额度 / 排序），以及和桌面端智能切号的活跃会话协调
+- launchd 常驻、设置页开关、中英文案
+- 未打补丁时单条输入 192KB 截断：重建会话时只能重放最近约 160KB 历史

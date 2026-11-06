@@ -1,0 +1,18 @@
+{
+  "name": "agy-bridge",
+  "version": "0.1.0",
+  "description": "Expose the locally signed-in Antigravity CLI (agy) as an OpenAI-compatible local API, with tools executed by your own harness and automatic account rotation",
+  "type": "module",
+  "bin": {
+    "agy-bridge": "bin/agy-bridge.mjs"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anglee0323/agy-bridge"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
