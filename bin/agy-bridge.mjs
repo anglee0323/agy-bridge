@@ -13,11 +13,11 @@
  * 环境变量：AGY_BRIDGE_PORT / AGY_BRIDGE_TOKEN / AGY_BRIDGE_HOME / AGY_TOOLS_DIR / AGY_SESSION_FILE 等
  */
 import { BridgeError, mapError } from "../lib/util.mjs";
-import { listAccounts, findCurrentAccount, upsertAccount } from "../lib/vault.mjs";
+import { listAccounts, findCurrentAccount, resolveAccount, upsertAccount } from "../lib/vault.mjs";
 import { backup, restore, listBackups, keychainRead } from "../lib/credstore.mjs";
 import { switchTo } from "../lib/switcher.mjs";
 import { refreshToken } from "../lib/oauth.mjs";
-import { addAccount } from "../lib/login.mjs";
+import { addAccount, loadState, saveState } from "../lib/login.mjs";
 
 const [subcommand = "serve", ...rest] = process.argv.slice(2);
 
@@ -40,10 +40,28 @@ function print(value) {
 }
 
 async function runCli() {
+  if (subcommand === "protect" || subcommand === "unprotect") {
+    const query = rest.find((arg) => !arg.startsWith("--"));
+    if (!query) throw new BridgeError("BAD_REQUEST", `usage: agy-bridge ${subcommand} <id|email|name>`);
+    const state = loadState();
+    const account = resolveAccount(query);
+    const set = new Set(state.protected ?? []);
+    if (subcommand === "protect") set.add(account.id); else set.delete(account.id);
+    state.protected = [...set];
+    saveState(state);
+    return print({ account: account.email, protected: subcommand === "protect" });
+  }
   if (subcommand === "accounts") {
     const current = await keychainRead();
     const match = current?.refreshToken ? findCurrentAccount(current.refreshToken) : null;
-    return print(listAccounts().map((a) => ({ ...a, isKeychain: match ? a.id === match.id : false })));
+    const state = loadState();
+    const now = Date.now();
+    return print(listAccounts().map((a) => ({
+      ...a,
+      isKeychain: match ? a.id === match.id : false,
+      protected: (state.protected ?? []).includes(a.id),
+      coolingMinutes: (state.exhaustedUntil?.[a.id] ?? 0) > now ? Math.round((state.exhaustedUntil[a.id] - now) / 60_000) : 0,
+    })));
   }
   if (subcommand === "backup") {
     const note = rest.find((arg) => !arg.startsWith("--")) ?? "manual";
