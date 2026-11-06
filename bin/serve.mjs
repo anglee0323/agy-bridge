@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// 进程名与二进制名一致，ps/活动监视器里不是裸 node
+process.title = "agy-bridge";
 /**
  * agy-bridge：把本机任何 ACP agent 包成 OpenAI 兼容接口（默认 127.0.0.1:8789/v1），
  * 工具由调用方 harness 经 MCP 挂起回填自己执行。桥不保存、不代理任何凭据。

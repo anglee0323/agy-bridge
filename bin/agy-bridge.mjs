@@ -13,7 +13,7 @@
  * 环境变量：AGY_BRIDGE_PORT / AGY_BRIDGE_TOKEN / AGY_BRIDGE_HOME / AGY_TOOLS_DIR / AGY_SESSION_FILE 等
  */
 import { BridgeError, mapError } from "../lib/util.mjs";
-import { listAccounts, findCurrentAccount, resolveAccount, upsertAccount, migrateFromAgySwitch } from "../lib/vault.mjs";
+import { listAccounts, findCurrentAccount, resolveAccount, upsertAccount, migrateFromAgySwitch, removeAccount } from "../lib/vault.mjs";
 import { backup, restore, listBackups, keychainRead } from "../lib/credstore.mjs";
 import { switchTo } from "../lib/switcher.mjs";
 import { refreshToken } from "../lib/oauth.mjs";
@@ -88,6 +88,17 @@ async function runCli() {
   if (subcommand === "add-account") {
     const result = await addAccount({ open: !rest.includes("--no-browser") }, (msg) => console.error(msg));
     return print(result);
+  }
+  if (subcommand === "remove") {
+    const query = rest.find((arg) => !arg.startsWith("--"));
+    if (!query) throw new BridgeError("BAD_REQUEST", "usage: agy-bridge remove <id|email|name>");
+    const account = resolveAccount(query);
+    const state = loadState();
+    state.protected = (state.protected ?? []).filter((id) => id !== account.id);
+    if (state.currentAccountId === account.id) state.currentAccountId = null;
+    delete (state.exhaustedUntil ?? {})[account.id];
+    saveState(state);
+    return print({ ...removeAccount(account.id), email: account.email });
   }
   if (subcommand === "migrate-from-agy-switch") {
     return print(migrateFromAgySwitch());
