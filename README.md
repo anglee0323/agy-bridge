@@ -39,7 +39,16 @@ harness 侧：任意支持自定义 OpenAI base URL 的工具，指向 `http://1
 
 ## 路线
 
-1. 账号金库 + 切号执行（从 agy-switch 移植 account_service，主号备份先行，过期号当哑巴负载验证）
-2. 轮次边界额度判断 → 自动切号 → 会话重建重放
-3. `accounts add` 浏览器 OAuth 登录
-4. launchd 常驻 + Pi provider 配置
+1. ✅ 账号金库 + 切号执行（已验证：主号⇄其它号真实互换、假凭据演练×3、备份/恢复可靠）
+2. 轮次边界额度判断 → 自动切号 → 会话重建重放（未动工）
+3. `accounts add` 浏览器 OAuth 登录（未动工）
+4. launchd 常驻 + Pi provider 配置（未动工）
+
+## 2026-11-06 切号实测结论
+
+- agy CLI 在 macOS 上的认证源是钥匙串条目（`security … -s gemini -a antigravity`）；会话文件 `~/.gemini/antigravity-cli/antigravity-oauth-token` 只是镜像，移走照样认证、不会重建。切号必须两处都写。
+- `agy --hub` 是 agy 按需拉起的守护进程，持有旧凭据内存副本；切换前必须关掉，下一次 agy 调会用新凭据重建。桥已自动处理。
+- agy-switch 的“先刷新目标 token 再写入”策略已移植：目标号刷新失败 = 零写入安全中止。
+- 主号（未入过 agy-switch 金库）已用 `import-current` 收入金库，标记 main。
+- **金库存量号 a-test-account 实测被 Google 以违反服务条款禁用（403，"service disabled for violation of ToS"）**，登录态活着但服务被拒。自动切号当前没有可用目标号。
+- 风险声明的条款风险已在本机发生过一次：多号轮换是 Google 明文禁止的行为，这批号大概率图此被禁。后续若新增账号重试同样模式，预期同样结局。

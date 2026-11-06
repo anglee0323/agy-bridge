@@ -1,138 +1,82 @@
 #!/usr/bin/env node
 /**
- * agy-bridge：把本机任何 ACP agent 包成 OpenAI 兼容接口（默认 127.0.0.1:8789/v1），
- * 工具由调用方 harness 经 MCP 挂起回填自己执行。桥不保存、不代理任何凭据。
+ * agy-bridge：把本机已登录的 Antigravity CLI（agy acp）包成 OpenAI 兼容接口（默认 127.0.0.1:8789/v1），
+ * 工具由调用方 harness 经 MCP 挂起回填自己执行。凭据本体只存在于官方 agy、钥匙串与备份目录。
  *
- * 环境变量：
- *   AGY_BRIDGE_PORT / AGY_BRIDGE_TOKEN / AGY_BRIDGE_HOME / AGY_BRIDGE_DEFAULT_EFFORT ...
+ * 子命令：
+ *   serve                            启动服务（默认，可省略）
+ *   accounts                         列出金库账号（~/.antigravity_tools）并标记当前登录号
+ *   backup [note]                    备份当前钥匙串条目 + 会话文件
+ *   backups / restore <stamp>        查看 / 恢复备份
+ *   switch <id|email> [--dry-run]    切号：先刷新目标 token，失败零写入
+ *
+ * 环境变量：AGY_BRIDGE_PORT / AGY_BRIDGE_TOKEN / AGY_BRIDGE_HOME / AGY_TOOLS_DIR / AGY_SESSION_FILE 等
  */
-import { existsSync } from "node:fs";
-import { createServer } from "node:http";
-import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
-import { Output } from "../lib/output.mjs";
-import { Runtime } from "../lib/runtime.mjs";
-import { BridgeError, log, mapError } from "../lib/util.mjs";
+import { BridgeError, mapError } from "../lib/util.mjs";
+import { listAccounts, findCurrentAccount, upsertCurrentAccount } from "../lib/vault.mjs";
+import { backup, restore, listBackups, keychainRead } from "../lib/credstore.mjs";
+import { switchTo } from "../lib/switcher.mjs";
+import { refreshToken } from "../lib/oauth.mjs";
 
-const env = process.env;
-const PORT = Number(env.AGY_BRIDGE_PORT ?? 8789);
-const HOST = "127.0.0.1";
-const TOKEN = env.AGY_BRIDGE_TOKEN || undefined;
+const [subcommand = "serve", ...rest] = process.argv.slice(2);
 
-function findAgy() {
-  if (env.AGY_BIN) return env.AGY_BIN;
-  const candidates = [join(homedir(), ".local", "bin", "agy"), ...(env.PATH ?? "").split(delimiter).filter(Boolean).map((d) => join(d, "agy"))];
-  const found = candidates.find((p) => existsSync(p));
-  if (!found) throw new Error("agy not found; install the Antigravity CLI and sign in once with `agy`");
-  return found;
-}
-
-const runtime = new Runtime({
-  agyBin: findAgy(),
-  home: env.AGY_BRIDGE_HOME ?? join(homedir(), ".cache", "agy-bridge", "agents", "antigravity"),
-  defaultEffort: env.AGY_BRIDGE_DEFAULT_EFFORT ?? "high",
-  maxLiveSessions: Number(env.AGY_BRIDGE_MAX_SESSIONS ?? 4),
-  idleTtlMs: Number(env.AGY_BRIDGE_IDLE_TTL_MS ?? 15 * 60_000),
-  parkedTtlMs: Number(env.AGY_BRIDGE_PARKED_TTL_MS ?? 10 * 60_000),
-  parkSettleMs: 250,
-  relayAfterMs: Number(env.AGY_BRIDGE_RELAY_AFTER_MS ?? 85_000),
-  maxRelays: 6,
-  maxContinuations: 3,
-  keepAliveMs: 10_000,
-});
-
-const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
-
-function json(res, status, value) {
-  const body = JSON.stringify(value);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
-  res.end(body);
-}
-
-function reject(res, error) {
-  const e = mapError(error);
-  json(res, e.status, { error: { message: e.message, type: e.kind.toLowerCase(), code: e.code } });
-}
-
-async function readJson(req, limit = 64 * 1024 * 1024) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > limit) throw new BridgeError("BAD_REQUEST", "request body too large");
-    chunks.push(chunk);
+/** 用 id_token（本地解 JWT）或 userinfo 接口辨识当前账号，不打日志。 */
+async function identifyToken(current) {
+  if (current.idToken) {
+    try {
+      const payload = JSON.parse(Buffer.from(current.idToken.split(".")[1], "base64url").toString("utf8"));
+      if (payload.email) return { email: payload.email, projectId: null };
+    } catch { /* 落到 userinfo */ }
   }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw new BridgeError("BAD_REQUEST", "request body is not valid JSON");
-  }
+  const res = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", { headers: { authorization: `Bearer ${current.accessToken}` } });
+  if (!res.ok) throw new BridgeError("AUTH", `cannot identify current account (userinfo ${res.status})`);
+  const info = await res.json();
+  return { email: info.email, projectId: null };
 }
 
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", `http://${HOST}`);
-  // DNS rebinding：Host 必须是回环地址；浏览器跨站请求一律带 Origin，直接拒绝
-  if (!ALLOWED_HOSTS.has(String(req.headers.host ?? ""))) return json(res, 403, { error: { message: "forbidden host" } });
-  if (req.headers.origin) return json(res, 403, { error: { message: "browser requests are not accepted" } });
-  if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return json(res, 401, { error: { message: "invalid bridge token", code: "invalid_api_key" } });
-
-  try {
-    if (req.method === "GET" && url.pathname === "/health") return json(res, 200, runtime.health());
-
-    if (req.method === "GET" && url.pathname === "/v1/models") {
-      if (!runtime.listModels().length) await runtime.warmup().catch(() => {});
-      return json(res, 200, {
-        object: "list",
-        data: runtime.listModels().map((m) => ({ id: m.id, object: "model", created: 0, owned_by: "antigravity", name: m.name })),
-      });
-    }
-
-    if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-      if (!String(req.headers["content-type"] ?? "").includes("application/json")) {
-        throw new BridgeError("BAD_REQUEST", "content-type must be application/json");
-      }
-      const body = await readJson(req);
-      const out = new Output(res, { stream: body.stream === true, model: String(body.model ?? ""), includeUsage: body.stream_options?.include_usage === true });
-      const controller = new AbortController();
-      res.on("close", () => { if (!out.ended) controller.abort(); });
-      try {
-        await runtime.chat(body, out, controller.signal);
-      } catch (error) {
-        const e = mapError(error);
-        log(`chat failed: ${e.kind} ${e.message}`);
-        out.fail(e);
-      }
-      if (!out.ended && !res.writableEnded) res.end();
-      return;
-    }
-
-    json(res, 404, { error: { message: `no route for ${req.method} ${url.pathname}` } });
-  } catch (error) {
-    if (!res.headersSent) reject(res, error);
-    else res.end();
-  }
-});
-
-server.requestTimeout = 0;
-server.headersTimeout = 60_000;
-server.keepAliveTimeout = 65_000;
-
-server.listen(PORT, HOST, () => {
-  log(`agy-bridge listening on http://${HOST}:${PORT}/v1`);
-  runtime.warmup().then(
-    () => log(`models: ${runtime.listModels().map((m) => m.id).join(", ")}`),
-    (error) => log(`warmup failed: ${mapError(error).message}`),
-  );
-});
-
-let stopping = false;
-async function shutdown(signal) {
-  if (stopping) return;
-  stopping = true;
-  log(`${signal}: shutting down`);
-  server.close();
-  await runtime.dispose();
-  process.exit(0);
+function print(value) {
+  console.log(JSON.stringify(value, null, 2));
 }
-process.on("SIGINT", () => void shutdown("SIGINT"));
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+async function runCli() {
+  if (subcommand === "accounts") {
+    const current = await keychainRead();
+    const match = current?.refreshToken ? findCurrentAccount(current.refreshToken) : null;
+    return print(listAccounts().map((a) => ({ ...a, isKeychain: match ? a.id === match.id : false })));
+  }
+  if (subcommand === "backup") {
+    const note = rest.find((arg) => !arg.startsWith("--")) ?? "manual";
+    return print({ backup: await backup(note) });
+  }
+  if (subcommand === "backups") return print(listBackups());
+  if (subcommand === "restore") {
+    const stamp = rest[0];
+    if (!stamp) throw new BridgeError("BAD_REQUEST", "usage: agy-bridge restore <stamp>");
+    return print(await restore(stamp));
+  }
+  if (subcommand === "switch") {
+    const query = rest.find((arg) => !arg.startsWith("--"));
+    if (!query) throw new BridgeError("BAD_REQUEST", "usage: agy-bridge switch <id|email> [--dry-run]");
+    return print(await switchTo(query, { dryRun: rest.includes("--dry-run") }));
+  }
+  if (subcommand === "import-current") {
+    const current = await keychainRead();
+    if (!current?.refreshToken) throw new BridgeError("BAD_REQUEST", "keychain has no antigravity credential to import");
+    const identity = await identifyToken(current);
+    const expiryTimestamp = current.expiry ? Math.floor(Date.parse(current.expiry) / 1000) : 0;
+    return print(upsertCurrentAccount({ ...identity, accessToken: current.accessToken, refreshToken: current.refreshToken, idToken: current.idToken, expiryTimestamp }, { name: rest.find((a) => !a.startsWith("--")) ?? null }));
+  }
+  if (subcommand === "whoami") {
+    const current = await keychainRead();
+    if (!current?.refreshToken) return print({ signedIn: false });
+    const identity = await identifyToken(current);
+    const match = findCurrentAccount(current.refreshToken);
+    return print({ signedIn: true, email: identity.email, inVault: !!match, vaultId: match?.id ?? null });
+  }
+  if (subcommand !== "serve") throw new BridgeError("BAD_REQUEST", `unknown subcommand: ${subcommand}`);
+  return false;
+}
+
+const cli = await runCli();
+if (cli !== false) process.exit(0);
+await import("./serve.mjs");
