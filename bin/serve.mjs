@@ -8,10 +8,10 @@ process.title = "agy-bridge";
  * 环境变量：
  *   AGY_BRIDGE_PORT / AGY_BRIDGE_TOKEN / AGY_BRIDGE_HOME / AGY_BRIDGE_DEFAULT_EFFORT ...
  */
-import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
+import { findAgy } from "../lib/agy.mjs";
 import { Output } from "../lib/output.mjs";
 import { Runtime } from "../lib/runtime.mjs";
 import { BridgeError, log, mapError } from "../lib/util.mjs";
@@ -21,19 +21,11 @@ const PORT = Number(env.AGY_BRIDGE_PORT ?? 8789);
 const HOST = "127.0.0.1";
 const TOKEN = env.AGY_BRIDGE_TOKEN || undefined;
 
-function findAgy() {
-  if (env.AGY_BIN) return env.AGY_BIN;
-  const candidates = [join(homedir(), ".local", "bin", "agy"), ...(env.PATH ?? "").split(delimiter).filter(Boolean).map((d) => join(d, "agy"))];
-  const found = candidates.find((p) => existsSync(p));
-  if (!found) throw new Error("agy not found; install the Antigravity CLI and sign in once with `agy`");
-  return found;
-}
-
 const runtime = new Runtime({
   agyBin: findAgy(),
   home: env.AGY_BRIDGE_HOME ?? join(homedir(), ".cache", "agy-bridge", "agents", "antigravity"),
   defaultEffort: env.AGY_BRIDGE_DEFAULT_EFFORT ?? "high",
-  maxLiveSessions: Number(env.AGY_BRIDGE_MAX_SESSIONS ?? 4),
+  maxLiveSessions: Number(env.AGY_BRIDGE_MAX_SESSIONS ?? 2),
   idleTtlMs: Number(env.AGY_BRIDGE_IDLE_TTL_MS ?? 15 * 60_000),
   parkedTtlMs: Number(env.AGY_BRIDGE_PARKED_TTL_MS ?? 10 * 60_000),
   parkSettleMs: 250,

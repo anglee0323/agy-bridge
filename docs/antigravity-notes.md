@@ -43,3 +43,12 @@ pi -e ./pi-provider.ts --model antigravity/gemini-3.8-flash
 - 额度耗尽时自动换号（接 agy-switch 的 `switch_account` / 额度 / 排序），以及和桌面端智能切号的活跃会话协调
 - launchd 常驻、设置页开关、中英文案
 - 未打补丁时单条输入 192KB 截断：重建会话时只能重放最近约 160KB 历史
+
+## 2026-11-07 补充实测
+
+- `agy -p /usage --output-format json` 不跑模型（num_turns=0，不建会话）。结构：`command.data.groups[]` = `{name, buckets[]}`，bucket = `{id, window: "5h"|"weekly", remaining_fraction, reset_time}`；分组 "Gemini Models" 与 "Claude and GPT models"，各自独立的 5 小时与周窗口。未使用的号显示 100%，重置时间为查询时刻起算。
+- **`/usage` 不反映封禁**：被封号的账号仍显示 100%，封禁只在真正发起模型请求时以“通知伪装成正常回复”的形式出现。
+- **私有 HOME 隔离可行**：把 `<HOME>/.gemini/antigravity-cli/antigravity-oauth-token` 写好，以该目录为 HOME 运行 agy，它就用这份凭据（过期的 access_token 会用 refresh_token 自行刷新并写回该文件）；空 HOME 则报 Authentication required。全程系统钥匙串条目指纹不变。推断原因：钥匙串位置随 HOME 变化，agy 找不到后回落到文件凭据。
+- agy 二进制里有 `AGY_ACCOUNT`、`AGY_ADC_AUTH`、`ANTIGRAVITY_CONFIG_REL_DIR` 等环境变量，用途未验证；私有 HOME 已足够，没有必要再探。
+- `agy -p` 会顺带拉起常驻的 `agy --hub` 进程，读完额度要把本次新增的 hub 收掉。
+- 社区项目 zacbemis/pi-antigravity-acp-provider 用的 AGY_ACP_FORCE_FILE_STORAGE 是它自带运行时的开关，agy 本体里没有这个变量。

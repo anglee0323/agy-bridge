@@ -17,7 +17,13 @@ import { listAccounts, findCurrentAccount, resolveAccount, upsertAccount, migrat
 import { backup, restore, listBackups, keychainRead } from "../lib/credstore.mjs";
 import { switchTo } from "../lib/switcher.mjs";
 import { refreshToken } from "../lib/oauth.mjs";
-import { addAccount, loadState, saveState } from "../lib/login.mjs";
+import { addAccount } from "../lib/login.mjs";
+import { loadState, mutateState } from "../lib/state.mjs";
+import { refreshQuota } from "../lib/homes.mjs";
+import { accountBlock } from "../lib/pool.mjs";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+import { homesRoot } from "../lib/homes.mjs";
 
 const [subcommand = "serve", ...rest] = process.argv.slice(2);
 
@@ -43,12 +49,12 @@ async function runCli() {
   if (subcommand === "protect" || subcommand === "unprotect") {
     const query = rest.find((arg) => !arg.startsWith("--"));
     if (!query) throw new BridgeError("BAD_REQUEST", `usage: agy-bridge ${subcommand} <id|email|name>`);
-    const state = loadState();
     const account = resolveAccount(query);
-    const set = new Set(state.protected ?? []);
-    if (subcommand === "protect") set.add(account.id); else set.delete(account.id);
-    state.protected = [...set];
-    saveState(state);
+    mutateState((state) => {
+      const set = new Set(state.protected ?? []);
+      if (subcommand === "protect") set.add(account.id); else set.delete(account.id);
+      state.protected = [...set];
+    });
     return print({ account: account.email, protected: subcommand === "protect" });
   }
   if (subcommand === "accounts") {
@@ -56,12 +62,48 @@ async function runCli() {
     const match = current?.refreshToken ? findCurrentAccount(current.refreshToken) : null;
     const state = loadState();
     const now = Date.now();
-    return print(listAccounts().map((a) => ({
-      ...a,
-      isKeychain: match ? a.id === match.id : false,
-      protected: (state.protected ?? []).includes(a.id),
-      coolingMinutes: (state.exhaustedUntil?.[a.id] ?? 0) > now ? Math.round((state.exhaustedUntil[a.id] - now) / 60_000) : 0,
-    })));
+    return print(listAccounts().map((a) => {
+      const row = { ...a, isKeychain: match ? a.id === match.id : false, protected: (state.protected ?? []).includes(a.id) };
+      for (const family of ["gemini", "thirdparty"]) {
+        const b = accountBlock(a.id, family, state, now);
+        if (b.blocked) (row.blocked ??= {})[family] = { reason: b.reason, minutes: Math.max(1, Math.round((b.until - now) / 60_000)) };
+      }
+      if (state.banStrikes?.[a.id]) row.banStrikes = state.banStrikes[a.id];
+      return row;
+    }));
+  }
+  if (subcommand === "quota") {
+    const cachedOnly = rest.includes("--cached");
+    const includeAll = rest.includes("--all");
+    const accounts = listAccounts().filter((a) => !a.disabled);
+    const fmtPct = (w) => (w ? `${String(Math.round(w.remaining * 100)).padStart(3)}%` : "  --");
+    const fmtTime = (w) => (w ? new Date(w.resetAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "");
+    const lines = [];
+    for (const a of accounts) {
+      const state = loadState();
+      const cooling = state.cooldowns?.[a.id];
+      const skip = !cachedOnly && !includeAll && cooling && cooling.until > Date.now() && (cooling.reason === "banned" || cooling.reason === "auth");
+      let note = "";
+      if (!cachedOnly && !skip) {
+        try { await refreshQuota(a.id); } catch (error) { note = `读取失败: ${error.message.slice(0, 60)}`; }
+      }
+      const q = loadState().quota?.[a.id];
+      if (skip) note = `跳过(${cooling.reason}，--all 强制读取)`;
+      const cell = (family) => q?.[family] ? `5h ${fmtPct(q[family].fiveHour)}(${fmtTime(q[family].fiveHour)}) 周 ${fmtPct(q[family].weekly)}(${fmtTime(q[family].weekly)})` : "无数据";
+      lines.push(`${(a.name ?? a.email).padEnd(18)} Gemini: ${cell("gemini")}\n${" ".repeat(18)} Claude/GPT: ${cell("thirdparty")}${note ? `\n${" ".repeat(18)} ${note}` : ""}`);
+    }
+    console.log(lines.join("\n"));
+    return;
+  }
+  if (subcommand === "reset-cooldowns") {
+    const query = rest.find((arg) => !arg.startsWith("--"));
+    const target = query ? resolveAccount(query) : null;
+    const cleared = mutateState((state) => {
+      const ids = target ? [target.id] : Object.keys({ ...state.cooldowns, ...state.familyCooldowns, ...state.banStrikes });
+      for (const id of ids) { delete state.cooldowns[id]; delete state.familyCooldowns[id]; delete state.banStrikes[id]; }
+      return ids.length;
+    });
+    return print({ cleared, scope: target ? target.email : "all" });
   }
   if (subcommand === "backup") {
     const note = rest.find((arg) => !arg.startsWith("--")) ?? "manual";
@@ -93,11 +135,12 @@ async function runCli() {
     const query = rest.find((arg) => !arg.startsWith("--"));
     if (!query) throw new BridgeError("BAD_REQUEST", "usage: agy-bridge remove <id|email|name>");
     const account = resolveAccount(query);
-    const state = loadState();
-    state.protected = (state.protected ?? []).filter((id) => id !== account.id);
-    if (state.currentAccountId === account.id) state.currentAccountId = null;
-    delete (state.exhaustedUntil ?? {})[account.id];
-    saveState(state);
+    mutateState((state) => {
+      state.protected = (state.protected ?? []).filter((id) => id !== account.id);
+      if (state.currentAccountId === account.id) state.currentAccountId = null;
+      delete state.cooldowns[account.id]; delete state.familyCooldowns[account.id]; delete state.banStrikes[account.id]; delete state.quota[account.id];
+    });
+    rmSync(join(homesRoot(), account.id), { recursive: true, force: true });
     return print({ ...removeAccount(account.id), email: account.email });
   }
   if (subcommand === "migrate-from-agy-switch") {
