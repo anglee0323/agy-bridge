@@ -153,6 +153,9 @@ migrate-from-agy-switch               一次性从 agy-switch 的数据目录导
 | `AGY_BRIDGE_IDLE_TTL_MS` / `AGY_BRIDGE_PARKED_TTL_MS` | 15 / 10 分钟 | 空闲会话与挂起会话的释放时间 |
 | `AGY_BRIDGE_VAULT` / `AGY_BRIDGE_HOMES` / `AGY_BRIDGE_HOME` | 见下 | 金库、私有 HOME 根目录、桥的隔离 agy 数据目录 |
 | `AGY_BIN` | 自动查找 | `agy` 二进制路径 |
+| `AGY_OAUTH_CLIENT_ID` / `AGY_OAUTH_CLIENT_SECRET` | 自动识别 | 手动指定 OAuth 客户端，两个都设置才生效 |
+
+OAuth 客户端凭据不放在本仓库：运行时从你本机的 `agy` 二进制里读取。client id 取自 `agy` 登录令牌的 `aud` 字段，secret 在二进制里的候选中用一次假令牌探测确认，结果缓存到 `~/.cache/agy-bridge/oauth-client.json`（`agy` 升级后自动重新识别）。所以需要先用 `agy` 登录过一次；识别失败时用上面两个环境变量手动指定。
 
 数据位置：`~/.agy-bridge/`（金库、私有 HOME、日志），`~/.cache/agy-bridge/`（运行状态 `state.json`、备份、隔离的 agy 数据目录）。备份目录里含有凭据，权限为 0700。
 
@@ -184,7 +187,7 @@ harness ──OpenAI──▶ agy-bridge ──ACP(stdio)──▶ agy acp ─�
 | `lib/state.mjs` | 运行状态读写，守护进程与命令行共用，每次现读、原子写 |
 | `lib/quota.mjs` / `lib/homes.mjs` | `/usage` 解析、私有 HOME 与额度刷新 |
 | `lib/switcher.mjs` / `lib/credstore.mjs` | 切号编排、钥匙串与会话文件、备份恢复 |
-| `lib/oauth.mjs` / `lib/login.mjs` / `lib/vault.mjs` | 令牌刷新、浏览器登录、账号金库 |
+| `lib/oauth.mjs` / `lib/oauth-client.mjs` / `lib/login.mjs` / `lib/vault.mjs` | 令牌刷新、OAuth 客户端识别、浏览器登录、账号金库 |
 | `lib/acp.mjs` / `lib/mcp.mjs` | `agy acp` 的 JSON-RPC 链路、回环 MCP 服务 |
 | `lib/transcript.mjs` / `lib/output.mjs` | 消息归一化与历史重放、OpenAI 响应输出 |
 
@@ -199,4 +202,4 @@ node tests-e2e.mjs        # 端到端，需要服务在运行、有可用账号�
 
 ## 许可证
 
-暂未指定，默认保留所有权利。
+MIT，见 [LICENSE](LICENSE)。

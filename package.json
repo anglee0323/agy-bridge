@@ -13,7 +13,7 @@
     "type": "git",
     "url": "https://github.com/anglee0323/agy-bridge"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "test": "node --no-warnings --test 'tests/*.test.mjs'"
