@@ -4,25 +4,6 @@
 
 *A local OpenAI-compatible bridge over the official Antigravity CLI (`agy acp`). Tools run in your own harness; sessions are reused across requests; an optional account pool rotates on quota exhaustion.*
 
-## 风险声明（使用前必读）
-
-**Google 明确不允许这种用法。** Antigravity [FAQ](https://antigravity.google/docs/faq) 原文：
-
-> Wrapping `agy` inside third-party coding agents or applications, or automating account rotation, is not supported under consumer plans.
-
-[服务条款](https://antigravity.google/terms/)第 6 条同时写明，使用第三方软件访问服务属于违约，可能导致 Antigravity 和 Gemini CLI 账号被暂停或终止。
-
-本项目恰好做了这两件事：把 `agy` 包进第三方 harness，并且可以自动轮换账号。
-
-- 桥只驱动**官方未修改的 `agy` 二进制**，不调用 Google 的模型接口；它只访问 Google 的 OAuth 端点（刷新令牌、浏览器登录、识别账号邮箱）。但这不改变上面的条款：Google 的官方答复明确说，即使调用的是原版 `agy`，也不被支持。
-- 作者用于测试的多个账号已经被 Google 以违反服务条款为由禁用。
-- 账号被封会影响 Antigravity、Gemini CLI 和 Gemini Code Assist，多个账号可能被同批处置。请只用你愿意承担后果的账号。
-- 想合规地在第三方 harness 里用 Gemini，Google 的建议是使用 Gemini Enterprise 或 Google AI Studio 的 API key，这时不需要本项目。
-- **关闭自动换号**：`AGY_BRIDGE_AUTO_SWITCH=0`。单账号使用时没有轮换，风险面更小，但上面的第一条仍然适用。
-- 项目**不提供**设备指纹伪装、代理出口轮换或任何规避风控的功能，也不会加入。
-
-本项目与 Google 无关联。
-
 ## 它做什么
 
 - **harness 自己执行工具。** harness 的工具通过一个回环 MCP 服务暴露给 `agy`；模型要调用工具时，桥把调用挂起并以 OpenAI `tool_calls` 返回，harness 执行后带着结果再来，桥把结果回填到同一轮生成里。`agy` 内置的文件、终端工具全部关闭。
