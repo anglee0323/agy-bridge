@@ -7,7 +7,7 @@
     "agy-bridge": "bin/agy-bridge.mjs"
   },
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.13"
   },
   "repository": {
     "type": "git",
