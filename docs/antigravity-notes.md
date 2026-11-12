@@ -62,3 +62,11 @@ pi -e ./pi-provider.ts --model antigravity/gemini-3.8-flash
 - prompt cache 的稳定窗口约 5 分钟，前缀（系统提示 + 工具表 + 历史）一变就掉；重放历史等于主动放弃缓存，所以桥优先 `session/resume`，接不上才重放。
 - 降智（上游静默路由到弱模型）在社区里反复出现：agy CLI 的算力池小于桌面端，且同一会话有粘滞性。可观测特征是高思考档位没有思考内容、解码速度异常高；桥据此打分告警，不做任何客户端伪装。
 - Anthropic 侧实测：`tool_use` 挂起 → 客户端回 `tool_result` → 同一轮续写正常；`usage.input_tokens` 取自会话库 `steps` 表（不含缓存读写），与 OpenAI 侧同源。
+
+## 2026-11-12 Responses（Codex）实测
+
+- Codex CLI 从 2026-02 起只支持 `wire_api = "responses"`，`chat` 已被删除；要接 Codex 必须在桥里实现 `/v1/responses`。
+- Codex 把 `apply_patch` 声明为 freeform 的 `{"type":"custom"}` 工具，模型输出是 `custom_tool_call`（`input` 是补丁原文），客户端回 `custom_tool_call_output`；普通工具仍是 `function_call` / `function_call_output`。
+- agy 会先按 JSON 校验工具参数：把 freeform 工具原样呈现给模型、模型又照 Codex 的描述输出原文时，agy 会回一句 `⚠ Model produced invalid output.` 并重试。桥的处理是把工具描述里的 “do not wrap in JSON” 换成 “把原文放进 input 字段”，并把这条告警当作 agy 内部通知扣住、不外发。
+- 实测：`custom_tool_call` 往返正常，补丁原文没有被包进 JSON；续接走的是同一套会话指纹（`a:<call_id>`），`custom_tool_call_output` 回填后同一轮继续。
+- Responses 的 `reasoning` item 桥不消费（不回传给 agy），`item_reference` 与内置工具（`web_search`、`local_shell` 等）直接跳过。

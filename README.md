@@ -1,8 +1,8 @@
 # agy-bridge
 
-把本机已登录的 Google Antigravity CLI（`agy`）包成本地接口，同时说 OpenAI Chat Completions 和 Anthropic Messages，让 Pi、Claude Code、Amp、Magpie 这类客户端直接使用 `agy` 里的模型。可选的多账号池会在额度耗尽时自动换号。
+把本机已登录的 Google Antigravity CLI（`agy`）包成本地接口，同时说 OpenAI Chat Completions、Anthropic Messages 和 OpenAI Responses，让 Pi、Claude Code、Codex、Amp、Magpie 这类客户端直接使用 `agy` 里的模型。可选的多账号池会在额度耗尽时自动换号。
 
-*A local OpenAI- and Anthropic-compatible bridge over the official Antigravity CLI (`agy acp`). Tools run in your own harness; sessions are reused and resumed across requests; an optional account pool rotates on quota exhaustion.*
+*A local OpenAI-, Anthropic- and Responses-compatible bridge over the official Antigravity CLI (`agy acp`). Tools run in your own harness; sessions are reused and resumed across requests; an optional account pool rotates on quota exhaustion.*
 
 ## 它做什么
 
@@ -11,6 +11,7 @@
 - **长耗时工具不超时。** 工具执行超过约 85 秒时先回"仍在运行"，让模型继续等待同一个结果，避开 `agy` 单次 MCP 调用 180 秒的上限。
 - **OpenAI 兼容。** `/v1/chat/completions`（流式与非流式、`tools`、`reasoning_effort`、`stream_options.include_usage`）和 `/v1/models`，推理内容走 `reasoning_content`。
 - **Anthropic 兼容。** `/v1/messages`（流式与非流式、`tools`、`thinking`）和 `/v1/messages/count_tokens`：思考、正文、`tool_use` 三种内容块，Claude Code 与 Magpie 可以直接接入。
+- **Responses 兼容。** `/v1/responses`：`message` / `reasoning` / `function_call` / `custom_tool_call` 四种 output item，Codex CLI 的 freeform `apply_patch` 会按原样往返。
 - **会话休眠与接回。** 会话 id 与指纹记在 `~/.cache/agy-bridge/sessions.json`（不存消息原文）。桥重启、空闲淘汰后，下一次请求用 ACP `session/resume` 接回原会话，而不是重放历史——重放会丢掉上游的 prompt cache。
 - **工具常驻函数表。** 每个 MCP 工具带 `_meta.antigravity.alwaysLoad`，agy 不会把较大的工具改成按需加载。
 - **降智告警。** 高思考档位却没有思考、解码速度异常时会记日志、计数，非流式响应带 `x-agy-degraded: 1`；可选让下一轮重建会话。
@@ -87,6 +88,29 @@ claude
 ```
 
 客户端自带的模型名（`claude-sonnet-4-5` 之类）桥不认识时，会落到 `AGY_BRIDGE_ANTHROPIC_MODEL`，没设置就用模型目录里的第一个模型；也可以用 `/v1/models` 里的任意 id（含 `-high` / `-medium` / `-low` 后缀）。`max_tokens`、`temperature`、`stop` 这些采样参数在 ACP 上没有对应项，会被忽略。
+
+### 接入 Codex CLI
+
+Codex 从 2026 年 2 月起只支持 Responses 协议（`wire_api = "chat"` 已删除），桥现在直接提供 `/v1/responses`：
+
+```toml
+# ~/.codex/config.toml
+model = "gemini-3.8-flash"
+model_provider = "agy-bridge"
+
+[model_providers.agy-bridge]
+name = "agy-bridge"
+base_url = "http://127.0.0.1:8789/v1"
+env_key = "AGY_BRIDGE_API_KEY"   # 没设 AGY_BRIDGE_TOKEN 时随便填一个值
+wire_api = "responses"
+```
+
+```bash
+export AGY_BRIDGE_API_KEY=local
+codex
+```
+
+Codex 的 `apply_patch` 是 freeform 的 `type: "custom"` 工具：桥在模型侧把它呈现成单字符串参数的函数，回来时还原成 `custom_tool_call`，补丁原文不会被包进 JSON。`web_search`、`local_shell` 这类内置工具桥不实现，会被跳过。
 
 ### 接入 Magpie
 
@@ -183,6 +207,8 @@ OAuth 客户端凭据不放在本仓库：运行时从你本机的 `agy` 二进�
 - 降智检测是启发式：模型有权决定不思考，所以只在多个信号同时出现时才告警，仍可能有误报。
 - Anthropic 侧返回的思考块 `signature` 为空；客户端把它回传时桥会忽略。
 - 接回休眠会话后的第一轮，agy 可能先看到一次过期的工具表（模型报一次 “undefined tool” 后自行重试）；工具调用本身是通的。
+- Responses 侧不实现 `previous_response_id` 的服务端状态：Codex 默认每轮发全量 `input`，桥按指纹续接；只发增量又带 `previous_response_id` 的客户端会拿不到历史。
+- Responses 的内置工具（`web_search`、`local_shell`、`file_search` 等）不实现，会被跳过；`custom` 工具按单字符串参数呈现。
 - 只在 macOS 与 `agy` 1.5.x 上测试。
 
 ## 工作原理
@@ -208,6 +234,7 @@ harness ──OpenAI──▶ agy-bridge ──ACP(stdio)──▶ agy acp ─�
 | `lib/acp.mjs` / `lib/mcp.mjs` | `agy acp` 的 JSON-RPC 链路、回环 MCP 服务 |
 | `lib/transcript.mjs` / `lib/output.mjs` | 消息归一化与历史重放、OpenAI 响应输出 |
 | `lib/anthropic.mjs` | Anthropic 请求翻译与 SSE 内容块输出 |
+| `lib/responses.mjs` | Responses 请求翻译、freeform 工具与 SSE 事件输出 |
 | `lib/sessions.mjs` | 休眠会话账本（会话 id + 指纹，不存原文） |
 | `lib/degrade.mjs` / `lib/metrics.mjs` | 降智启发式、Prometheus 导出 |
 

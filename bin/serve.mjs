@@ -15,6 +15,7 @@ import { findAgy } from "../lib/agy.mjs";
 import { AnthropicOutput, estimateTokens, toChatBody } from "../lib/anthropic.mjs";
 import { prometheus } from "../lib/metrics.mjs";
 import { Output } from "../lib/output.mjs";
+import { ResponsesOutput, toChatBody as toResponsesBody } from "../lib/responses.mjs";
 import { Runtime } from "../lib/runtime.mjs";
 import { BridgeError, log, mapError } from "../lib/util.mjs";
 
@@ -132,6 +133,28 @@ const server = createServer(async (req, res) => {
       } catch (error) {
         const e = mapError(error);
         log(`messages failed: ${e.kind} ${e.message}`);
+        out.fail(e);
+      }
+      if (!out.ended && !res.writableEnded) res.end();
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/responses") {
+      if (!String(req.headers["content-type"] ?? "").includes("application/json")) {
+        throw new BridgeError("BAD_REQUEST", "content-type must be application/json");
+      }
+      const body = await readJson(req);
+      if (!runtime.listModels().length) await runtime.warmup().catch(() => {});
+      const chat = toResponsesBody(body, { fallbackModel: runtime.coerceModel(String(body.model ?? "")) });
+      chat.model = runtime.coerceModel(String(chat.model ?? ""));
+      const out = new ResponsesOutput(res, { stream: body.stream === true, model: String(body.model ?? chat.model), customTools: chat.customTools });
+      const controller = new AbortController();
+      res.on("close", () => { if (!out.ended) controller.abort(); });
+      try {
+        await runtime.chat(chat, out, controller.signal);
+      } catch (error) {
+        const e = mapError(error);
+        log(`responses failed: ${e.kind} ${e.message}`);
         out.fail(e);
       }
       if (!out.ended && !res.writableEnded) res.end();
