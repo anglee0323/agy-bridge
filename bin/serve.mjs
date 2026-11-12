@@ -12,6 +12,8 @@ import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findAgy } from "../lib/agy.mjs";
+import { AnthropicOutput, estimateTokens, toChatBody } from "../lib/anthropic.mjs";
+import { prometheus } from "../lib/metrics.mjs";
 import { Output } from "../lib/output.mjs";
 import { Runtime } from "../lib/runtime.mjs";
 import { BridgeError, log, mapError } from "../lib/util.mjs";
@@ -34,6 +36,12 @@ const runtime = new Runtime({
   maxContinuations: 3,
   keepAliveMs: 10_000,
   autoSwitch: env.AGY_BRIDGE_AUTO_SWITCH !== "0",
+  // Anthropic 客户端（Claude Code 等）带的模型名不是 agy 的模型 id，落到这个默认模型
+  anthropicModel: env.AGY_BRIDGE_ANTHROPIC_MODEL || env.AGY_BRIDGE_DEFAULT_MODEL || undefined,
+  // 降智（上游静默路由到弱模型）时是否在下一轮重建会话；默认只告警
+  degradeRollover: env.AGY_BRIDGE_DEGRADE_ROLLOVER === "1",
+  // 固定 MCP 端口：重启后休眠会话才能带着工具接回同一个端点；0 = 随机端口
+  mcpPort: Number(env.AGY_BRIDGE_MCP_PORT ?? PORT + 1),
 });
 
 const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
@@ -74,6 +82,12 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && url.pathname === "/health") return json(res, 200, runtime.health());
 
+    if (req.method === "GET" && url.pathname === "/metrics") {
+      const body = prometheus(runtime.health());
+      res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "content-length": Buffer.byteLength(body) });
+      return res.end(body);
+    }
+
     if (req.method === "GET" && url.pathname === "/v1/models") {
       if (!runtime.listModels().length) await runtime.warmup().catch(() => {});
       return json(res, 200, {
@@ -95,6 +109,29 @@ const server = createServer(async (req, res) => {
       } catch (error) {
         const e = mapError(error);
         log(`chat failed: ${e.kind} ${e.message}`);
+        out.fail(e);
+      }
+      if (!out.ended && !res.writableEnded) res.end();
+      return;
+    }
+
+    if (req.method === "POST" && (url.pathname === "/v1/messages" || url.pathname === "/v1/messages/count_tokens")) {
+      if (!String(req.headers["content-type"] ?? "").includes("application/json")) {
+        throw new BridgeError("BAD_REQUEST", "content-type must be application/json");
+      }
+      const body = await readJson(req);
+      if (url.pathname.endsWith("/count_tokens")) return json(res, 200, { input_tokens: estimateTokens(body) });
+      if (!runtime.listModels().length) await runtime.warmup().catch(() => {});
+      const chat = toChatBody(body, { fallbackModel: runtime.coerceModel(String(body.model ?? "")) });
+      chat.model = runtime.coerceModel(String(chat.model ?? ""));
+      const out = new AnthropicOutput(res, { stream: body.stream === true, model: String(body.model ?? chat.model) });
+      const controller = new AbortController();
+      res.on("close", () => { if (!out.ended) controller.abort(); });
+      try {
+        await runtime.chat(chat, out, controller.signal);
+      } catch (error) {
+        const e = mapError(error);
+        log(`messages failed: ${e.kind} ${e.message}`);
         out.fail(e);
       }
       if (!out.ended && !res.writableEnded) res.end();
