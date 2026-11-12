@@ -37,8 +37,9 @@ const runtime = new Runtime({
   maxContinuations: 3,
   keepAliveMs: 10_000,
   autoSwitch: env.AGY_BRIDGE_AUTO_SWITCH !== "0",
-  // Anthropic 客户端（Claude Code 等）带的模型名不是 agy 的模型 id，落到这个默认模型
-  anthropicModel: env.AGY_BRIDGE_ANTHROPIC_MODEL || env.AGY_BRIDGE_DEFAULT_MODEL || undefined,
+  // 客户端自带的模型名（Claude Code 的 claude-*、Codex 的 gpt-5*）不是 agy 的模型 id，
+  // 认不出来就落到这个默认模型；AGY_BRIDGE_ANTHROPIC_MODEL 是旧名字，保留兼容。
+  fallbackModel: env.AGY_BRIDGE_FALLBACK_MODEL || env.AGY_BRIDGE_ANTHROPIC_MODEL || env.AGY_BRIDGE_DEFAULT_MODEL || undefined,
   // 降智（上游静默路由到弱模型）时是否在下一轮重建会话；默认只告警
   degradeRollover: env.AGY_BRIDGE_DEGRADE_ROLLOVER === "1",
   // 固定 MCP 端口：重启后休眠会话才能带着工具接回同一个端点；0 = 随机端口

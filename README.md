@@ -87,7 +87,7 @@ export ANTHROPIC_MODEL=gemini-3.8-flash
 claude
 ```
 
-客户端自带的模型名（`claude-sonnet-4-5` 之类）桥不认识时，会落到 `AGY_BRIDGE_ANTHROPIC_MODEL`，没设置就用模型目录里的第一个模型；也可以用 `/v1/models` 里的任意 id（含 `-high` / `-medium` / `-low` 后缀）。`max_tokens`、`temperature`、`stop` 这些采样参数在 ACP 上没有对应项，会被忽略。
+客户端自带的模型名（`claude-sonnet-4-5` 之类）桥不认识时，会落到 `AGY_BRIDGE_FALLBACK_MODEL`，没设置就用模型目录里的第一个模型；也可以用 `/v1/models` 里的任意 id（含 `-high` / `-medium` / `-low` 后缀）。`max_tokens`、`temperature`、`stop` 这些采样参数在 ACP 上没有对应项，会被忽略。
 
 ### 接入 Codex CLI
 
@@ -110,7 +110,9 @@ export AGY_BRIDGE_API_KEY=local
 codex
 ```
 
-Codex 的 `apply_patch` 是 freeform 的 `type: "custom"` 工具：桥在模型侧把它呈现成单字符串参数的函数，回来时还原成 `custom_tool_call`，补丁原文不会被包进 JSON。`web_search`、`local_shell` 这类内置工具桥不实现，会被跳过。
+Codex 的 `apply_patch` 是 freeform 的 `type: "custom"` 工具：桥在模型侧把它呈现成单字符串参数的函数，回来时还原成 `custom_tool_call`，补丁原文不会被包进 JSON。Codex 会按模型名决定用不用这个工具，用 `gemini-*` 这类它不认识的模型名时通常退回 `exec_command` 改文件，两条路都能走通。`web_search`、`local_shell` 这类内置工具桥不实现，会被跳过。
+
+本机也可以只加一个 profile，不动默认配置：`~/.codex/agy.config.toml` 里写 `model` + `model_provider = "agy-bridge"`，然后 `codex -p agy`。
 
 ### 接入 Magpie
 
@@ -187,7 +189,7 @@ migrate-from-agy-switch               一次性从 agy-switch 的数据目录导
 | `AGY_BRIDGE_RELAY_AFTER_MS` | `85000` | 工具执行多久后先回"仍在运行" |
 | `AGY_BRIDGE_IDLE_TTL_MS` / `AGY_BRIDGE_PARKED_TTL_MS` | 15 / 10 分钟 | 空闲会话与挂起会话的释放时间 |
 | `AGY_BRIDGE_MCP_PORT` | `AGY_BRIDGE_PORT + 1` | 回环 MCP 端口；固定端口被占用时自动退回随机端口（此时带工具的休眠会话不再接回） |
-| `AGY_BRIDGE_ANTHROPIC_MODEL` | 模型目录第一个 | Anthropic 客户端带的模型名认不出来时用的模型 |
+| `AGY_BRIDGE_FALLBACK_MODEL` | 模型目录第一个 | 客户端自带的模型名（`claude-*`、`gpt-5*`）认不出来时用的模型；旧名 `AGY_BRIDGE_ANTHROPIC_MODEL` 仍可用 |
 | `AGY_BRIDGE_DEGRADE_ROLLOVER` | 关 | 设为 `1` 时，疑似降智的轮次结束后下一轮重建会话 |
 | `AGY_BRIDGE_VAULT` / `AGY_BRIDGE_HOMES` / `AGY_BRIDGE_HOME` | 见下 | 金库、私有 HOME 根目录、桥的隔离 agy 数据目录 |
 | `AGY_BIN` | 自动查找 | `agy` 二进制路径 |
