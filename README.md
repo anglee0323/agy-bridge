@@ -1,8 +1,8 @@
 # agy-bridge
 
-把本机已登录的 Google Antigravity CLI（`agy`）包成 OpenAI 兼容的本地接口，让 Pi 这类支持自定义 OpenAI 地址的编码 harness 直接使用 `agy` 里的模型。可选的多账号池会在额度耗尽时自动换号。
+把本机已登录的 Google Antigravity CLI（`agy`）包成本地接口，同时说 OpenAI Chat Completions 和 Anthropic Messages，让 Pi、Claude Code、Amp、Magpie 这类客户端直接使用 `agy` 里的模型。可选的多账号池会在额度耗尽时自动换号。
 
-*A local OpenAI-compatible bridge over the official Antigravity CLI (`agy acp`). Tools run in your own harness; sessions are reused across requests; an optional account pool rotates on quota exhaustion.*
+*A local OpenAI- and Anthropic-compatible bridge over the official Antigravity CLI (`agy acp`). Tools run in your own harness; sessions are reused and resumed across requests; an optional account pool rotates on quota exhaustion.*
 
 ## 它做什么
 
@@ -10,6 +10,10 @@
 - **同一对话只发增量。** 按消息指纹把请求映射到已有会话：只多出用户新消息就只发增量；历史被改写、桥重启或换号后，用转录重放重建会话。
 - **长耗时工具不超时。** 工具执行超过约 85 秒时先回"仍在运行"，让模型继续等待同一个结果，避开 `agy` 单次 MCP 调用 180 秒的上限。
 - **OpenAI 兼容。** `/v1/chat/completions`（流式与非流式、`tools`、`reasoning_effort`、`stream_options.include_usage`）和 `/v1/models`，推理内容走 `reasoning_content`。
+- **Anthropic 兼容。** `/v1/messages`（流式与非流式、`tools`、`thinking`）和 `/v1/messages/count_tokens`：思考、正文、`tool_use` 三种内容块，Claude Code 与 Magpie 可以直接接入。
+- **会话休眠与接回。** 会话 id 与指纹记在 `~/.cache/agy-bridge/sessions.json`（不存消息原文）。桥重启、空闲淘汰后，下一次请求用 ACP `session/resume` 接回原会话，而不是重放历史——重放会丢掉上游的 prompt cache。
+- **工具常驻函数表。** 每个 MCP 工具带 `_meta.antigravity.alwaysLoad`，agy 不会把较大的工具改成按需加载。
+- **降智告警。** 高思考档位却没有思考、解码速度异常时会记日志、计数，非流式响应带 `x-agy-degraded: 1`；可选让下一轮重建会话。
 - **账号池（可选）。** 按模型族读额度、冷却到真实重置时间、空闲时主动换号，被封的号按退避间隔复测。
 - **只监听回环地址。** 校验 Host、拒绝带 Origin 的浏览器请求，可选 Bearer 令牌。
 
@@ -33,6 +37,7 @@ node bin/agy-bridge.mjs
 ```bash
 curl -s http://127.0.0.1:8789/health
 curl -s http://127.0.0.1:8789/v1/models
+curl -s http://127.0.0.1:8789/metrics        # Prometheus 文本格式
 ```
 
 模型列表以 `/v1/models` 为准，来自 `agy` 当前账号可用的模型。模型 id 可以带强度后缀（如 `gemini-3.8-flash-high`），也可以用请求里的 `reasoning_effort`（`low`、`medium`、`high`）。
@@ -69,6 +74,31 @@ curl -s http://127.0.0.1:8789/v1/models
 ```
 
 其它 harness 填 Base URL `http://127.0.0.1:8789/v1`，API key 任意（设置了 `AGY_BRIDGE_TOKEN` 时填该令牌）。
+
+### 接入 Claude Code / Anthropic 客户端
+
+桥同时提供 Anthropic Messages 接口，把客户端指过来即可，不需要插件：
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8789
+export ANTHROPIC_AUTH_TOKEN=local     # 设置了 AGY_BRIDGE_TOKEN 时填该令牌
+export ANTHROPIC_MODEL=gemini-3.8-flash
+claude
+```
+
+客户端自带的模型名（`claude-sonnet-4-5` 之类）桥不认识时，会落到 `AGY_BRIDGE_ANTHROPIC_MODEL`，没设置就用模型目录里的第一个模型；也可以用 `/v1/models` 里的任意 id（含 `-high` / `-medium` / `-low` 后缀）。`max_tokens`、`temperature`、`stop` 这些采样参数在 ACP 上没有对应项，会被忽略。
+
+### 接入 Magpie
+
+Magpie 的 provider 插件说 Anthropic Messages，所以可以直接把桥当成一个 provider：
+
+```bash
+# Magpie 里新增自定义 provider（OpenAI 或 Anthropic 格式都行）
+# Base URL: http://127.0.0.1:8789
+# 模型：gemini-3.8-flash / claude-sonnet-4-6 / gpt-oss-120b-medium
+```
+
+社区里的 `@magpie-community/opencode-agy-cli-auth` 插件把 agy 直接拉进 Magpie 进程；本桥的差别是 agy 只跑在一个独立进程里，Magpie 重启不影响会话，账号池与额度冷却也由桥统一管理。
 
 ### 开机常驻（macOS）
 
@@ -132,6 +162,9 @@ migrate-from-agy-switch               一次性从 agy-switch 的数据目录导
 | `AGY_BRIDGE_DEFAULT_EFFORT` | `high` | 请求未指定时的推理强度 |
 | `AGY_BRIDGE_RELAY_AFTER_MS` | `85000` | 工具执行多久后先回"仍在运行" |
 | `AGY_BRIDGE_IDLE_TTL_MS` / `AGY_BRIDGE_PARKED_TTL_MS` | 15 / 10 分钟 | 空闲会话与挂起会话的释放时间 |
+| `AGY_BRIDGE_MCP_PORT` | `AGY_BRIDGE_PORT + 1` | 回环 MCP 端口；固定端口被占用时自动退回随机端口（此时带工具的休眠会话不再接回） |
+| `AGY_BRIDGE_ANTHROPIC_MODEL` | 模型目录第一个 | Anthropic 客户端带的模型名认不出来时用的模型 |
+| `AGY_BRIDGE_DEGRADE_ROLLOVER` | 关 | 设为 `1` 时，疑似降智的轮次结束后下一轮重建会话 |
 | `AGY_BRIDGE_VAULT` / `AGY_BRIDGE_HOMES` / `AGY_BRIDGE_HOME` | 见下 | 金库、私有 HOME 根目录、桥的隔离 agy 数据目录 |
 | `AGY_BIN` | 自动查找 | `agy` 二进制路径 |
 | `AGY_OAUTH_CLIENT_ID` / `AGY_OAUTH_CLIENT_SECRET` | 自动识别 | 手动指定 OAuth 客户端，两个都设置才生效 |
@@ -146,7 +179,9 @@ OAuth 客户端凭据不放在本仓库：运行时从你本机的 `agy` 二进�
 - ACP 不支持采样参数：`temperature`、`stop`、`max_tokens` 会被忽略。
 - 内层 `agy` 有自己的系统提示词，桥只能在后面追加，不能替换。
 - `agy` 把同一响应里的多个工具调用串行执行，每个调用各占一次 harness 往返。
-- 换号意味着会话重建：历史会重放，缓存是冷的；重放最多带最近约 160KB 历史。
+- 换号会重启 `agy acp`：会话尽量用 `session/resume` 接回，接不上才重放历史（最多最近约 160KB）。
+- 降智检测是启发式：模型有权决定不思考，所以只在多个信号同时出现时才告警，仍可能有误报。
+- Anthropic 侧返回的思考块 `signature` 为空；客户端把它回传时桥会忽略。
 - 只在 macOS 与 `agy` 1.5.x 上测试。
 
 ## 工作原理
@@ -171,6 +206,9 @@ harness ──OpenAI──▶ agy-bridge ──ACP(stdio)──▶ agy acp ─�
 | `lib/oauth.mjs` / `lib/oauth-client.mjs` / `lib/login.mjs` / `lib/vault.mjs` | 令牌刷新、OAuth 客户端识别、浏览器登录、账号金库 |
 | `lib/acp.mjs` / `lib/mcp.mjs` | `agy acp` 的 JSON-RPC 链路、回环 MCP 服务 |
 | `lib/transcript.mjs` / `lib/output.mjs` | 消息归一化与历史重放、OpenAI 响应输出 |
+| `lib/anthropic.mjs` | Anthropic 请求翻译与 SSE 内容块输出 |
+| `lib/sessions.mjs` | 休眠会话账本（会话 id + 指纹，不存原文） |
+| `lib/degrade.mjs` / `lib/metrics.mjs` | 降智启发式、Prometheus 导出 |
 
 实测得到的 `agy` 行为记录在 [docs/antigravity-notes.md](docs/antigravity-notes.md)。
 

@@ -52,3 +52,13 @@ pi -e ./pi-provider.ts --model antigravity/gemini-3.8-flash
 - agy 二进制里有 `AGY_ACCOUNT`、`AGY_ADC_AUTH`、`ANTIGRAVITY_CONFIG_REL_DIR` 等环境变量，用途未验证；私有 HOME 已足够，没有必要再探。
 - `agy -p` 会顺带拉起常驻的 `agy --hub` 进程，读完额度要把本次新增的 hub 收掉。
 - 社区项目 zacbemis/pi-antigravity-acp-provider 用的 AGY_ACP_FORCE_FILE_STORAGE 是它自带运行时的开关，agy 本体里没有这个变量。
+
+## 2026-11-12 补充实测（agy 1.5.5）
+
+- `initialize` 的 `agentCapabilities`：`loadSession: true`、`sessionCapabilities: {resume, close, load, list, additionalDirectories}`、`mcpCapabilities: {http: true}`、`_meta.antigravity: {tier: true, systemPrompt: {append: true}}`。所以会话接回、会话列表、HTTP MCP 都是官方能力，不需要模拟编辑器。
+- `session/resume` 只认 `{sessionId}`；`session/close` 之后仍然可以 resume（返回 `{sessionId, models, modes, configOptions, _meta}`），所以“关闭会话释放 worker”和“之后接回”可以同时成立。多传的参数（如 `mcpServers`）不会被拒绝，但响应里不回显，是否生效没有可观测证据。
+- resume 后的**第一轮** prompt 可能看到过期的工具表：模型会先报一次 “undefined tool”，agy 内部重试后同一轮就能正常调用。工具调用本身是通的（桥的 MCP 端点与 tenant 需要先注册好）。
+- `tools/list` 里每个工具带 `_meta: {"antigravity": {"alwaysLoad": true}}` 时，agy 不会把较大的工具改成按需加载（社区实测，agy#989）。桥仍然会把工具声明压到 ~1.35KB 以内，两条一起用。
+- prompt cache 的稳定窗口约 5 分钟，前缀（系统提示 + 工具表 + 历史）一变就掉；重放历史等于主动放弃缓存，所以桥优先 `session/resume`，接不上才重放。
+- 降智（上游静默路由到弱模型）在社区里反复出现：agy CLI 的算力池小于桌面端，且同一会话有粘滞性。可观测特征是高思考档位没有思考内容、解码速度异常高；桥据此打分告警，不做任何客户端伪装。
+- Anthropic 侧实测：`tool_use` 挂起 → 客户端回 `tool_result` → 同一轮续写正常；`usage.input_tokens` 取自会话库 `steps` 表（不含缓存读写），与 OpenAI 侧同源。
