@@ -39,7 +39,13 @@ node bin/agy-bridge.mjs
 curl -s http://127.0.0.1:8789/health
 curl -s http://127.0.0.1:8789/v1/models
 curl -s http://127.0.0.1:8789/metrics        # Prometheus 文本格式
+curl -s http://127.0.0.1:8789/v1/quota       # 当前号额度快照 + 数据年龄
+curl -s -X POST http://127.0.0.1:8789/v1/quota/refresh   # 主动刷新（约 10s，?all=1 刷全部号）
 ```
+
+额度快照默认每 30 分钟在后台刷新一次当前号（`AGY_BRIDGE_QUOTA_REFRESH_MS`，0 关闭），
+所以在没有流量的情况下，`state.json` 里的 `quota` 也不会一直停在上次使用时刻。
+命令行侧可以用 `agy-bridge quota --current` 只刷当前号（约 10s），不加参数则刷全部号（约 1 分钟）。
 
 模型列表以 `/v1/models` 为准，来自 `agy` 当前账号可用的模型。模型 id 可以带强度后缀（如 `gemini-3.8-flash-high`），也可以用请求里的 `reasoning_effort`（`low`、`medium`、`high`）。
 

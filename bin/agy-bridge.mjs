@@ -75,7 +75,12 @@ async function runCli() {
   if (subcommand === "quota") {
     const cachedOnly = rest.includes("--cached");
     const includeAll = rest.includes("--all");
-    const accounts = listAccounts().filter((a) => !a.disabled);
+    // --current 只刷当前号：一次 agy -p /usage 约 10s，全部号要 1 分钟
+    const currentOnly = rest.includes("--current");
+    const currentId = currentOnly ? loadState().currentAccountId : null;
+    const accounts = currentOnly
+      ? listAccounts().filter((a) => a.id === currentId)
+      : listAccounts().filter((a) => !a.disabled);
     const fmtPct = (w) => (w ? `${String(Math.round(w.remaining * 100)).padStart(3)}%` : "  --");
     const fmtTime = (w) => (w ? new Date(w.resetAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "");
     const lines = [];

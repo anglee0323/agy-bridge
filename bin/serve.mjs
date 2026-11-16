@@ -7,6 +7,7 @@ process.title = "agy-bridge";
  *
  * 环境变量：
  *   AGY_BRIDGE_PORT / AGY_BRIDGE_TOKEN / AGY_BRIDGE_HOME / AGY_BRIDGE_DEFAULT_EFFORT ...
+ *   AGY_BRIDGE_QUOTA_REFRESH_MS：后台刷新当前号额度的间隔（默认 30 分钟，0 关闭）
  */
 import { createServer } from "node:http";
 import { homedir } from "node:os";
@@ -88,6 +89,16 @@ const server = createServer(async (req, res) => {
       const body = prometheus(runtime.health());
       res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "content-length": Buffer.byteLength(body) });
       return res.end(body);
+    }
+
+    // 额度：GET 只读快照（不触发请求），POST 主动刷新（默认当前号，?all=1 刷全部）
+    if (req.method === "GET" && url.pathname === "/v1/quota") {
+      return json(res, 200, runtime.quotaSnapshot());
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/quota/refresh") {
+      const results = await runtime.refreshQuota({ all: url.searchParams.get("all") === "1" });
+      return json(res, 200, { results });
     }
 
     if (req.method === "GET" && url.pathname === "/v1/models") {
@@ -175,6 +186,8 @@ server.keepAliveTimeout = 65_000;
 
 server.listen(PORT, HOST, () => {
   log(`agy-bridge listening on http://${HOST}:${PORT}/v1`);
+  // 闲置时也保持额度新鲜：桥只在服务过请求后才顺带查额度，看板读 state 会一直是旧值
+  runtime.startQuotaRefresh(Number(env.AGY_BRIDGE_QUOTA_REFRESH_MS ?? 30 * 60_000));
   runtime.warmup().then(
     () => log(`models: ${runtime.listModels().map((m) => m.id).join(", ")}`),
     (error) => log(`warmup failed: ${mapError(error).message}`),
