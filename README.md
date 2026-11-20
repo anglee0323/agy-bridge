@@ -47,6 +47,11 @@ curl -s -X POST http://127.0.0.1:8789/v1/quota/refresh   # 主动刷新（约 10
 所以在没有流量的情况下，`state.json` 里的 `quota` 也不会一直停在上次使用时刻。
 命令行侧可以用 `agy-bridge quota --current` 只刷当前号（约 10s），不加参数则刷全部号（约 1 分钟）。
 
+桥跑的所有 `agy` 子进程都会前置一个 no-browser shim（`~/.agy-bridge/no-browser/`）：
+`agy` 认证失败时会自动回落交互式 OAuth 并调 `open` 弹出系统浏览器，后台无人值守刷新时
+这等于自己弹一个 Google 授权页出来。shim 把 URL 记到 `no-browser/opened.log` 就返回，
+认证失败则在 1 秒内报 AUTH，不再弹窗、也不再等 45 秒超时。
+
 模型列表以 `/v1/models` 为准，来自 `agy` 当前账号可用的模型。模型 id 可以带强度后缀（如 `gemini-3.8-flash-high`），也可以用请求里的 `reasoning_effort`（`low`、`medium`、`high`）。
 
 ### 接入 Pi
@@ -237,6 +242,7 @@ harness ──OpenAI──▶ agy-bridge ──ACP(stdio)──▶ agy acp ─�
 | `lib/pool.mjs` | 额度判定、冷却、选号、错误分类（纯函数，有单测） |
 | `lib/state.mjs` | 运行状态读写，守护进程与命令行共用，每次现读、原子写 |
 | `lib/quota.mjs` / `lib/homes.mjs` | `/usage` 解析、私有 HOME 与额度刷新 |
+| `lib/browser-shim.mjs` | 拦住 agy 自动弹浏览器登录（后台刷新不能弹窗） |
 | `lib/switcher.mjs` / `lib/credstore.mjs` | 切号编排、钥匙串与会话文件、备份恢复 |
 | `lib/oauth.mjs` / `lib/oauth-client.mjs` / `lib/login.mjs` / `lib/vault.mjs` | 令牌刷新、OAuth 客户端识别、浏览器登录、账号金库 |
 | `lib/acp.mjs` / `lib/mcp.mjs` | `agy acp` 的 JSON-RPC 链路、回环 MCP 服务 |
